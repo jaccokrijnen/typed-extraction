@@ -93,6 +93,7 @@ From MetaCoq.TypedExtraction Require Import Annotations.
 
 Module Terms.
 
+  Section Terms.
   Context (Δ : list tvdecl).
   Fixpoint trans_mono
     (Γ : list name) (* term vars *)
@@ -120,6 +121,7 @@ Module Terms.
       | None => None
     end
   .
+  End Terms.
 
 End Terms.
 
@@ -179,3 +181,73 @@ Definition to_lam_box_T (p : program) : result_bytestring_err (∑ Σ : ExAst.gl
   end.
 
 Eval cbv in to_lam_box_T t_id.
+
+Definition t_id_erased : EAst.term := (EAst.tLambda (nNamed "x") (EAst.tRel 0)).
+Definition t_id_annots : annots box_type t_id_erased := (TArr (TVar 0) (TVar 0), TVar 0).
+
+Eval cbv in Terms.trans [tyVarDecl "A" kind_Base] t_id_erased t_id_annots.
+
+
+Import ExAst.
+
+(* TODO: get kinds, instead of assuming base kind *)
+Definition tvdecls_from_names : list name -> list tvdecl :=
+  map (fun n => tyVarDecl (print_name n) kind_Base).
+
+
+Definition trans_global_decl
+  (kn : kername)
+  (d : ExAst.global_decl)
+  (anns : global_decl_annots box_type d) : option PlutusIR.binding :=
+  match d
+  return global_decl_annots box_type d -> _
+  with
+  | ConstantDecl (Build_constant_body (Γ, τ) (Some t)) => fun (η : annots box_type t) =>
+      let kn_pir := string_of_kername kn in
+      let Γ_pir  := tvdecls_from_names Γ in
+      match Types.trans Γ_pir τ, Terms.trans Γ_pir t η with
+      | Some τ_pir, Some t_pir => Some (TermBind Strict (VarDecl kn_pir τ_pir ) (t_pir))
+      | _, _ => None
+      end
+  | _ => fun _ => None
+      (*
+  | InductiveDecl mind => None
+  | TypeAliasDecl _    => None
+       *)
+  end anns.
+
+
+
+
+
+Fixpoint trans_env Σ : env_annots box_type Σ -> list (option PlutusIR.binding) :=
+  fun ann =>
+  match Σ return env_annots box_type Σ -> _ with
+  | (kn , _ , gdecl) :: Σ' => fun '(ann_decl, ann_Σ') =>
+       trans_global_decl kn gdecl ann_decl :: trans_env Σ' ann_Σ'
+  | nil => fun ann => []
+  end ann.
+
+
+Definition compile (t : Env.program) :=
+  match to_lam_box_T t with
+  | Ok (Σ; η) => Some (trans_env Σ η)
+  | _ => None 
+  end.
+
+Eval cbv in compile t_id.
+
+
+
+(* Test with higher kinds *)
+Definition higher_kinds :=  (fun (F : Set -> Set) (A : Set) (x : F A) => x).
+MetaCoq Quote Recursively Definition t_higher_kinds := higher_kinds.
+
+Eval cbv in to_lam_box_T t_higher_kinds.
+(* Problem: extracted type is incorrect:
+
+    Erasure.Ex.cst_type :=
+      ([nNamed "F"; nNamed "A"], TArr (TVar 0) (TVar 0));
+    Erasure.Ex.cst_body := Some (tLambda (nNamed "x") (tRel 0))
+*)
+Eval cbv in compile t_higher_kinds.
