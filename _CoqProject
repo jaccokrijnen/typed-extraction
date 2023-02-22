@@ -19,6 +19,8 @@ theories/Transform.v
 theories/TypeAnnotations.v
 theories/Utils.v
 theories/WcbvEvalAux.v
+theories/PlutusIR.v
+theories/Util.v
 
 -Q tests MetaCoq.TypedExtraction.Tests
 tests/ErasureTests.v

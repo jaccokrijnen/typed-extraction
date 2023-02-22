@@ -1,3 +1,5 @@
+From MetaCoq.TypedExtraction Require Import Erasure PlutusIR.
+From Coq Require Import Datatypes.
 From Coq Require Import List.
 From Coq Require Import String.
 From MetaCoq.TypedExtraction Require Import Utils.
@@ -79,7 +81,89 @@ Section printing.
     | _ => fun _ => "error: cannot print"
     end.
 
+
+  Section TranslateTypes.
+
+  Context (Δ : list name). (* type vars *)
+
+  Definition translate_ty  :=
+    fix translate (bt : box_type) :=
+      match bt with
+      | TArr dom codom =>
+          match translate dom, translate codom with
+          | Some dom', Some codom' => Some (ty_App dom' codom')
+          | _, _ => None
+          end
+      | TApp t1 t2 =>
+          match translate t1, translate t2 with
+          | Some t1', Some t2' => Some (ty_App t1' t2')
+          | _, _ => None
+          end
+      | TVar i =>
+          match nth_error Δ i with
+          | Some na => Some (ty_Var (print_name na))
+          | None => None
+          end
+      | TConst s => Some (ty_Var (string_of_kername s))
+      | TInd ind => Some (ty_Var (string_of_kername (inductive_mind ind)))
+      | TBox => None
+      | TAny => None
+      end.
+
+  (* TODO: Consider kinds other than kind_Base for type parameters, do we need a kind checker? *)
+  Definition translate_tyscheme (Δ : list name) (t : box_type) : option ty :=
+    match translate_ty t with
+      | Some inner => let scheme := fold_right (fun n ty => ty_Forall (print_name n) kind_Base ty) inner Δ in
+          Some scheme
+      | None => None
+    end.
+
+  Fixpoint translate
+    (Γ : list name) (* term vars *)
+    (t : term) : annots box_type t -> option PlutusIR.term :=
+    match t with
+    | tRel i => fun bt =>
+        Some (Var (print_name (nth i Γ nAnon)))
+    | tLambda na body => fun '(bt, a) =>
+        match translate (na :: Γ) body a, translate_ty bt with
+        | Some body', Some τ => Some
+            (LamAbs (print_name na) τ body')
+        | _, _ => None
+        end
+    | tApp hd arg =>
+      fun '(bt, (hda, arga)) =>
+        match translate Γ hd hda, translate Γ arg arga with
+        | Some hd', Some arg' => Some (Apply hd' arg')
+        | _, _ => None
+        end
+    | _ => fun _ => None
+    end.
+
+
+MetaCoq Quote Recursively Definition ex1 := (forall (A B : Type) (a : A * B) (C : Type), A * B * C).
+
+Program Definition erase_type_program (p : Ast.Env.program) : global_env_ext * (list name * box_type) :=
+  let Σ := trans_global_env p.1 in
+  let Σext := empty_ext (PCUICProgram.trans_env_env Σ) in
+  (Σext, erase_type_impl Σext _ Σext eq_refl (trans Σ p.2) _).
+Next Obligation. Admitted.
+Next Obligation. Admitted.
+
+Definition erase_and_print_type
+           {cf : checker_flags}
+           (after_erasure : box_type -> box_type)
+           (p : Ast.Env.program) : string × string :=
+  let '(Σ, (tvars, bt)) := erase_type_program p in
+  (print_type_vars tvars, print_box_type Σ (todo "") tvars bt).
+
+Example ex1_test :
+  erase_and_print_type id ex1 =
+  ("A B C", "□ → □ → prod A B → □ → prod (prod A B) C").
+Proof. vm_compute. reflexivity. Qed.
+
+  End TranslateTypes.
 End printing.
+
 
 Definition opt_args :=
   {| check_wf_env_func Σ := Ok (assume_env_wellformed Σ);
